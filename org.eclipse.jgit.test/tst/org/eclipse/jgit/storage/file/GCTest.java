@@ -48,12 +48,8 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.io.File;
-import java.util.Collections;
 import java.io.IOException;
 import java.util.Collections;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.Set;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CyclicBarrier;
@@ -66,12 +62,8 @@ import org.eclipse.jgit.JGitText;
 import org.eclipse.jgit.junit.LocalDiskRepositoryTestCase;
 import org.eclipse.jgit.junit.TestRepository;
 import org.eclipse.jgit.junit.TestRepository.BranchBuilder;
-import org.eclipse.jgit.lib.ObjectId;
-import org.eclipse.jgit.revwalk.RevCommit;
-import org.eclipse.jgit.storage.file.GC.RepoStatistics;
 import org.eclipse.jgit.junit.TestRepository.CommitBuilder;
 import org.eclipse.jgit.lib.EmptyProgressMonitor;
-import org.eclipse.jgit.lib.NullProgressMonitor;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Ref.Storage;
 import org.eclipse.jgit.lib.RefUpdate;
@@ -82,7 +74,7 @@ import org.eclipse.jgit.revwalk.RevBlob;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevTag;
 import org.eclipse.jgit.revwalk.RevTree;
-import org.eclipse.jgit.storage.file.PackIndex.MutableEntry;
+import org.eclipse.jgit.storage.file.GC.RepoStatistics;
 import org.eclipse.jgit.util.FileUtils;
 import org.junit.After;
 import org.junit.Before;
@@ -119,7 +111,7 @@ public class GCTest extends LocalDiskRepositoryTestCase {
 		RevBlob a = tr.blob("a");
 		tr.lightweightTag("t", a);
 
-		GC.packRefs(NullProgressMonitor.INSTANCE, repo);
+		gc.packRefs();
 		assertSame(repo.getRef("t").getStorage(), Storage.PACKED);
 	}
 
@@ -136,7 +128,7 @@ public class GCTest extends LocalDiskRepositoryTestCase {
 			public Integer call() throws Exception {
 				syncPoint.await();
 				try {
-					GC.packRefs(NullProgressMonitor.INSTANCE, repo);
+					gc.packRefs();
 					return 0;
 				} catch (IOException e) {
 					return 1;
@@ -164,7 +156,7 @@ public class GCTest extends LocalDiskRepositoryTestCase {
 				"refs/tags/t1"), repo.getFS());
 		try {
 			refLock.lock();
-			GC.packRefs(NullProgressMonitor.INSTANCE, repo);
+			gc.packRefs();
 		} finally {
 			refLock.unlock();
 		}
@@ -212,7 +204,7 @@ public class GCTest extends LocalDiskRepositoryTestCase {
 			pool.submit(new Callable<Void>() {
 				public Void call() throws Exception {
 					refUpdateLockedRef.await();
-					GC.packRefs(NullProgressMonitor.INSTANCE, repo);
+					gc.packRefs();
 					packRefsDone.await();
 					return null;
 				}
@@ -232,7 +224,7 @@ public class GCTest extends LocalDiskRepositoryTestCase {
 
 	@Test
 	public void repackEmptyRepo_noPackCreated() throws IOException {
-		GC.repack(null, repo);
+		gc.repack();
 		assertEquals(0, repo.getObjectDatabase().getPacks().size());
 	}
 
@@ -258,7 +250,8 @@ public class GCTest extends LocalDiskRepositoryTestCase {
 			/** @return 0 for success, 1 in case of error when writing pack */
 			public Integer call() throws Exception {
 				try {
-					GC.repack(this, repo);
+					// TODO: gc.setProgressMonitor(this);
+					gc.repack();
 					return 0;
 				} catch (IOException e) {
 					// leave the syncPoint in broken state so any awaiting
@@ -295,15 +288,16 @@ public class GCTest extends LocalDiskRepositoryTestCase {
 
 	@Test
 	public void nonReferencedNonExpiredObject_notPruned() throws Exception {
+		long start = now();
 		RevBlob a = tr.blob("a");
-		GC.prune(null, repo, Collections.<ObjectId> emptySet(), 1);
+		gc.prune(Collections.<ObjectId> emptySet(), now() - start);
 		assertTrue(repo.hasObject(a));
 	}
 
 	@Test
 	public void nonReferencedExiredObject_pruned() throws Exception {
 		RevBlob a = tr.blob("a");
-		GC.prune(null, repo, Collections.<ObjectId> emptySet(), 0);
+		gc.prune(Collections.<ObjectId> emptySet(), 0);
 		assertFalse(repo.hasObject(a));
 	}
 
@@ -311,7 +305,7 @@ public class GCTest extends LocalDiskRepositoryTestCase {
 	public void nonReferencedExpiredObjectTree_pruned() throws Exception {
 		RevBlob a = tr.blob("a");
 		RevTree t = tr.tree(tr.file("a", a));
-		GC.prune(null, repo, Collections.<ObjectId> emptySet(), 0);
+		gc.prune(Collections.<ObjectId> emptySet(), 0);
 		assertFalse(repo.hasObject(t));
 		assertFalse(repo.hasObject(a));
 	}
@@ -320,7 +314,7 @@ public class GCTest extends LocalDiskRepositoryTestCase {
 	public void lightweightTag_objectNotPruned() throws Exception {
 		RevBlob a = tr.blob("a");
 		tr.lightweightTag("t", a);
-		GC.prune(null, repo, Collections.<ObjectId> emptySet(), 0);
+		gc.prune(Collections.<ObjectId> emptySet(), 0);
 		assertTrue(repo.hasObject(a));
 	}
 
@@ -330,7 +324,7 @@ public class GCTest extends LocalDiskRepositoryTestCase {
 		RevTag t = tr.tag("t", a); // this doesn't create the refs/tags/t ref
 		tr.lightweightTag("t", t);
 
-		GC.prune(null, repo, Collections.<ObjectId> emptySet(), 0);
+		gc.prune(Collections.<ObjectId> emptySet(), 0);
 		assertTrue(repo.hasObject(t));
 		assertTrue(repo.hasObject(a));
 	}
@@ -339,7 +333,7 @@ public class GCTest extends LocalDiskRepositoryTestCase {
 	public void branch_historyNotPruned() throws Exception {
 		RevCommit tip = commitChain(10);
 		tr.branch("b").update(tip);
-		GC.prune(null, repo, Collections.<ObjectId> emptySet(), 0);
+		gc.prune(Collections.<ObjectId> emptySet(), 0);
 		do {
 			assertTrue(repo.hasObject(tip));
 			tr.parseBody(tip);
@@ -358,8 +352,8 @@ public class GCTest extends LocalDiskRepositoryTestCase {
 		update.setForceUpdate(true);
 		update.delete();
 		// TODO: expire reflogs
-		GC.prune(null, repo, Collections.<ObjectId> emptySet(), 0);
-		assertEquals(0, looseObjectIDs().size());
+		gc.prune(Collections.<ObjectId> emptySet(), 0);
+		assertTrue(gc.getStatistics().nrOfLooseObjects == 0);
 	}
 
 	@Test
@@ -385,7 +379,7 @@ public class GCTest extends LocalDiskRepositoryTestCase {
 		update.setForceUpdate(true);
 		update.delete();
 
-		GC.prune(null, repo, Collections.<ObjectId> emptySet(), 0);
+		gc.prune(Collections.<ObjectId> emptySet(), 0);
 		assertTrue(repo.hasObject(b2Tip));
 	}
 
@@ -597,5 +591,9 @@ public class GCTest extends LocalDiskRepositoryTestCase {
 			cb = cb.child();
 		} while (depth > 0);
 		return tip;
+	}
+
+	private static long now() {
+		return System.currentTimeMillis();
 	}
 }
